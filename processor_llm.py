@@ -1,36 +1,39 @@
+import re
+import os
 from dotenv import load_dotenv
 from groq import Groq
-import json
-import re
 
 load_dotenv()
-groq = Groq()
+
+api_key = os.getenv("GROQ_API_KEY")
+if not api_key:
+    print("ERROR: GROQ_API_KEY not found in.env file!")
+    # Don't crash, create dummy client that will fallback
+    groq = None
+else:
+    groq = Groq(api_key=api_key)
 
 def classify_with_llm(log_msg):
-    prompt = f'''Classify the log message into one of these categories: 
-    (1) Workflow Error, (2) Deprecation Warning.
-    If you can't figure out a category, use "Unclassified".
-    Put the category inside <category> </category> tags. 
-    Log message: {log_msg}'''
+    if groq is None:
+        return "Unclassified"
 
-    chat_completion = groq.chat.completions.create(
-        messages=[{"role": "user", "content": prompt}],
-        model="llama-3.3-70b-versatile", # <-- changed this
-        temperature=0.1 # use lower temp for classification, more consistent
-    )
+    MODELS = ["openai/gpt-oss-20b", "openai/gpt-oss-120b", "llama-3.1-8b-instant"]
+    prompt = f'Classify into Workflow Error, Deprecation Warning, Unclassified. Log: "{log_msg}"\n\nRespond like <category>Workflow Error</category>'
 
-    content = chat_completion.choices[0].message.content
-    match = re.search(r'<category>(.*?)<\/category>', content, flags=re.DOTALL)
-    category = "Unclassified"
-    if match:
-        category = match.group(1).strip()
+    for model_name in MODELS:
+        try:
+            res = groq.chat.completions.create(
+                messages=[{"role":"user","content":prompt}],
+                model=model_name,
+                temperature=0
+            )
+            content = res.choices[0].message.content
+            match = re.search(r'<category>(.*?)</category>', content, re.DOTALL)
+            if match:
+                return match.group(1).strip()
+            return content.strip()
+        except Exception as e:
+            print(f"{model_name} failed: {e}")
+            continue
 
-    return category
-
-
-if __name__ == "__main__":
-    print(classify_with_llm(
-        "Case escalation for ticket ID 7324 failed because the assigned support agent is no longer active."))
-    print(classify_with_llm(
-        "The 'ReportGenerator' module will be retired in version 4.0. Please migrate to the 'AdvancedAnalyticsSuite' by Dec 2025"))
-    print(classify_with_llm("System reboot initiated by user 12345."))
+    return "Unclassified"
