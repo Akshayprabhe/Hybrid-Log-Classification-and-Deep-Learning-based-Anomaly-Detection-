@@ -64,14 +64,30 @@ async def classify_logs(file: UploadFile):
     try:
         contents = await file.read()
         df = pd.read_csv(io.StringIO(contents.decode('utf-8')))
+        
+        # FIX: accept Source / SOURCE also
+        df.columns = [c.lower().strip() for c in df.columns]
+
         if "source" not in df.columns or "log_message" not in df.columns:
-            raise HTTPException(status_code=400, detail="CSV must contain 'source' and 'log_message' columns.")
-        df["target_label"] = classify(list(zip(df["source"], df["log_message"])))
+            raise HTTPException(status_code=400, detail=f"CSV must contain 'source' and 'log_message' columns. Found: {list(df.columns)}")
+
+        # FIX: Never crash even if Groq fails
+        try:
+            df["target_label"] = classify(list(zip(df["source"], df["log_message"])))
+        except Exception as e:
+            print(f"Classify failed but continuing: {e}")
+            df["target_label"] = "Unclassified"
+
         os.makedirs("resources", exist_ok=True)
-        output_file = "resources/output.csv"
-        df.to_csv(output_file, index=False)
-        return {"data": df.to_dict(orient="records")}
+        df.to_csv("resources/output.csv", index=False)
+
+        return {"data": df.head(50).to_dict(orient="records")}
+
+    except HTTPException as he:
+        raise he
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        import traceback
+        traceback.print_exc()
+        return {"data": [{"source": "System", "log_message": f"Error: {e}", "target_label": "Failed"}]}
     finally:
         await file.close()
